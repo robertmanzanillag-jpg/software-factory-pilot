@@ -5053,12 +5053,12 @@ function createFactoryPilotGitHubClient(options) {
           });
           throw Error("FACTORY_GITHUB_REQUEST_UNCONFIRMED");
         }
-        if (response.status !== success) {
+        if (!(Array.isArray(success) ? success.includes(response.status) : response.status === success)) {
           void response.body?.cancel().catch(() => {
           });
           throw Object.assign(Error("FACTORY_GITHUB_HTTP_FAILURE"), { status: response.status });
         }
-        if (success === 204) {
+        if (response.status === 204) {
           void response.body?.cancel().catch(() => {
           });
           return void 0;
@@ -5228,7 +5228,11 @@ function createFactoryPilotGitHubClient(options) {
       scope(input);
       id(input.workflow_id);
       branch(input.ref);
-      return call(`/actions/workflows/${input.workflow_id}/dispatches`, "POST", { ref: input.ref }, 204);
+      const data = await call(`/actions/workflows/${input.workflow_id}/dispatches`, "POST", { ref: input.ref }, [200, 204]);
+      if (data === void 0) return;
+      id(data.workflow_run_id);
+      if (data.run_url !== `${root}/actions/runs/${data.workflow_run_id}` || data.html_url !== `https://github.com/${FACTORY_PILOT_REPOSITORY}/actions/runs/${data.workflow_run_id}`) throw Error("FACTORY_GITHUB_DISPATCH_UNCONFIRMED");
+      return data;
     } } : {}
   }, pulls: {
     async list(input) {

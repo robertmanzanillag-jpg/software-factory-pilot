@@ -59,7 +59,7 @@ try {
     assert.equal(rendered.overflow,false);assert.equal(rendered.link,`${origin}/health.json`);
     const screenshot=await call('Page.captureScreenshot',{format:'png'});assert.ok(Buffer.from(screenshot.data,'base64').length>1000);
     screenshots.push({viewport:width===390?'mobile':'desktop',sha256:createHash('sha256').update(Buffer.from(screenshot.data,'base64')).digest('hex')});
-    await evaluate('document.querySelector("a[href=\"health.json\"]").click()');
+    await evaluate(`document.querySelector("a[href='health.json']").click()`);
     await until(()=>evaluate('location.pathname === "/health.json" && document.readyState === "complete"'));
     const live=JSON.parse(await evaluate('document.querySelector("pre")?.textContent ?? document.body.innerText'));assert.deepEqual(live,manifest);
   }

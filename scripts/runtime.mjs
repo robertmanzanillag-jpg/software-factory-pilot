@@ -48,7 +48,8 @@ export async function createPilotRuntime(control) {
         if(run.status==='completed') {if(run.conclusion!=='success')throw Error('RELEASE_EXECUTION_UNCONFIRMED');return run.html_url;}
       } else if(!dispatched) {
         dispatched=true;
-        await api(control,'/actions/workflows/release.yml/dispatches',{method:'POST',expected:204,signal,body:{ref:'main',inputs:{base_sha:state.candidate.baseSha,head_sha:state.candidate.headSha,target:state.target,operation,job_id:job.id}}});
+        const receipt=await api(control,'/actions/workflows/release.yml/dispatches',{method:'POST',signal,body:{ref:'main',inputs:{base_sha:state.candidate.baseSha,head_sha:state.candidate.headSha,target:state.target,operation,job_id:job.id}}});
+        if(!Number.isSafeInteger(receipt.workflow_run_id)||receipt.workflow_run_id<1||receipt.html_url!==`https://github.com/${repository}/actions/runs/${receipt.workflow_run_id}`||receipt.run_url!==`https://api.github.com/repos/${repository}/actions/runs/${receipt.workflow_run_id}`)throw Error('RELEASE_DISPATCH_RECEIPT_INVALID');
       }
       await wait(10000,signal);
     }
