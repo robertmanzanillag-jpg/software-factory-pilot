@@ -1,0 +1,28 @@
+name: Software factory worker
+on:
+  workflow_dispatch:
+    inputs:
+      mode: {type: choice, options: [run, activate, status], default: run, required: true}
+  schedule:
+    - cron: '17 * * * *'
+permissions: {}
+concurrency:
+  group: factory-state
+  cancel-in-progress: false
+jobs:
+  worker:
+    if: github.repository == 'robertmanzanillag-jpg/software-factory-pilot' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions: {contents: write, actions: write, pull-requests: write}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 1
+        with: {persist-credentials: false}
+      - name: Process durable queue with reserved budget
+        timeout-minutes: 33
+        run: node scripts/worker.mjs "$FACTORY_MODE"
+        env:
+          FACTORY_MODE: ${{ inputs.mode || 'run' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
