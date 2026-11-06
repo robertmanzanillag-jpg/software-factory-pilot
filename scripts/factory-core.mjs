@@ -5330,7 +5330,10 @@ function createOpenAiFactoryTextProvider(config) {
       const costCents = cost(usage.input_tokens, usage.output_tokens);
       if (!Number.isSafeInteger(costCents) || usage.input_tokens !== counted.input_tokens || usage.output_tokens > input.maxOutputTokens || costCents > input.maxCostCents) throw Error("usage bounds");
       if (!["completed", "failed", "incomplete", "cancelled"].includes(response.status)) throw Error("execution still active");
-      if (response.status !== "completed" || response.error || response.incomplete_details) return { status: "failed", reason: "FACTORY_OPENAI_NOT_COMPLETED", costCents };
+      if (response.status !== "completed" || response.error || response.incomplete_details) {
+        const reason = response.status === "incomplete" ? response.incomplete_details?.reason === "max_output_tokens" ? "FACTORY_OPENAI_OUTPUT_LIMIT" : "FACTORY_OPENAI_INCOMPLETE" : response.status === "cancelled" ? "FACTORY_OPENAI_RESPONSE_CANCELLED" : response.status === "failed" ? "FACTORY_OPENAI_RESPONSE_FAILED" : "FACTORY_OPENAI_NOT_COMPLETED";
+        return { status: "failed", reason, costCents };
+      }
       if (!Array.isArray(response.output)) throw Error("output");
       let text = "";
       for (const item of response.output) {
@@ -5356,21 +5359,21 @@ function createOpenAiFactoryTextProvider(config) {
 // server/software-factory-openai-builder.ts
 import { lstat as lstat2, readFile } from "node:fs/promises";
 import path2 from "node:path";
-function plainTextPatch(source, response) {
+function plainTextPatch(source, response, diagnose) {
   try {
-    if (!source.endsWith("\n") || /[\r\0\uFEFF]/.test(source) || /<!--|<\s*(?:script|style|textarea|xmp|iframe|noembed|noframes|plaintext)\b/i.test(source)) return "";
+    if (!source.endsWith("\n") || /[\r\0\uFEFF]/.test(source) || /<!--|<\s*(?:script|style|textarea|xmp|iframe|noembed|noframes|plaintext)\b/i.test(source)) return diagnose("UNSUPPORTED_SOURCE");
     const edit = JSON.parse(response);
-    if (!edit || typeof edit !== "object" || Array.isArray(edit) || Object.keys(edit).sort().join(",") !== "after,before") return "";
+    if (!edit || typeof edit !== "object" || Array.isArray(edit) || Object.keys(edit).sort().join(",") !== "after,before") return diagnose("INVALID_EDIT_SHAPE");
     const valid = (text) => typeof text === "string" && text.trim().length > 0 && text.length <= 5e3 && !/[<>&\x00-\x1f\x7f]/.test(text) && !/(?:[a-z][a-z0-9+.-]*:|\/\/|www\.)/i.test(text);
-    if (!valid(edit.before) || !valid(edit.after) || edit.before === edit.after) return "";
+    if (!valid(edit.before) || !valid(edit.after) || edit.before === edit.after) return diagnose("INVALID_EDIT_TEXT");
     const offset = source.indexOf(edit.before);
-    if (offset < 0 || source.indexOf(edit.before, offset + 1) !== -1) return "";
+    if (offset < 0 || source.indexOf(edit.before, offset + 1) !== -1) return diagnose("NONUNIQUE_EDIT");
     let textStart = 0, inText = false;
     for (const tag of source.matchAll(/<(?:"[^"]*"|'[^']*'|[^'">])*>/g)) {
       if (offset >= textStart && offset + edit.before.length <= tag.index) inText = true;
       textStart = tag.index + tag[0].length;
     }
-    if (!inText) return "";
+    if (!inText) return diagnose("NON_TEXT_EDIT");
     const updated = source.slice(0, offset) + edit.after + source.slice(offset + edit.before.length);
     const oldLines = source.slice(0, -1).split("\n"), newLines = updated.slice(0, -1).split("\n");
     return [
@@ -5383,7 +5386,7 @@ function plainTextPatch(source, response) {
       ""
     ].join("\n");
   } catch {
-    return "";
+    return diagnose("MALFORMED_JSON");
   }
 }
 function createOpenAiFactoryPatchGenerator(options) {
@@ -5431,12 +5434,40 @@ function createOpenAiFactoryPatchGenerator(options) {
       signal
     });
     if (result.status === "unknown") throw new Error("FACTORY_MODEL_EXECUTION_UNCONFIRMED");
-    const text = result.status === "completed" ? result.text : "";
-    const patch = patchMode === "plainTextEdits" ? plainTextPatch(contents[0].text, text) : text && !text.endsWith("\n") ? `${text}
+    let diagnostic;
+    if (result.status !== "completed") {
+      diagnostic = result.reason === "FACTORY_OPENAI_OUTPUT_LIMIT" ? "PROVIDER_OUTPUT_LIMIT" : result.reason === "FACTORY_OPENAI_INCOMPLETE" ? "PROVIDER_INCOMPLETE" : result.reason === "FACTORY_OPENAI_RESPONSE_CANCELLED" ? "PROVIDER_RESPONSE_CANCELLED" : result.reason === "FACTORY_OPENAI_RESPONSE_FAILED" ? "PROVIDER_RESPONSE_FAILED" : result.reason === "FACTORY_OPENAI_NOT_COMPLETED" ? "PROVIDER_NOT_COMPLETED" : result.reason === "FACTORY_OPENAI_REFUSAL" ? "PROVIDER_REFUSAL" : result.reason === "FACTORY_OPENAI_EMPTY_TEXT" ? "PROVIDER_EMPTY_TEXT" : result.status === "blocked" ? "PROVIDER_BLOCKED" : "PROVIDER_FAILED";
+      return { patch: "", costCents: result.costCents, diagnostic };
+    }
+    const text = result.text;
+    const patch = patchMode === "plainTextEdits" ? plainTextPatch(contents[0].text, text, (reason) => {
+      diagnostic = reason;
+      return "";
+    }) : text && !text.endsWith("\n") ? `${text}
 ` : text;
-    return { patch, costCents: result.costCents };
+    return { patch, costCents: result.costCents, ...!patch ? { diagnostic: diagnostic ?? "EMPTY_PATCH" } : {} };
   };
 }
+
+// server/software-factory-builder.ts
+var factoryPatchDiagnostics = [
+  "PROVIDER_OUTPUT_LIMIT",
+  "PROVIDER_INCOMPLETE",
+  "PROVIDER_RESPONSE_CANCELLED",
+  "PROVIDER_RESPONSE_FAILED",
+  "PROVIDER_NOT_COMPLETED",
+  "PROVIDER_REFUSAL",
+  "PROVIDER_EMPTY_TEXT",
+  "PROVIDER_BLOCKED",
+  "PROVIDER_FAILED",
+  "MALFORMED_JSON",
+  "INVALID_EDIT_SHAPE",
+  "INVALID_EDIT_TEXT",
+  "NONUNIQUE_EDIT",
+  "NON_TEXT_EDIT",
+  "UNSUPPORTED_SOURCE",
+  "EMPTY_PATCH"
+];
 
 // server/software-factory-actions.ts
 import { createHash as createHash5 } from "node:crypto";
@@ -5847,6 +5878,8 @@ function createFactoryRemotePipelineBuilder(options) {
       uncertain = false;
       stopped();
       phase = "PATCH";
+      if (!generated.patch && generated.diagnostic && factoryPatchDiagnostics.includes(generated.diagnostic))
+        return result("failed", `FACTORY_REMOTE_BUILD_FAILED:${generated.diagnostic}`);
       const changedFiles = validateFactoryPublicationPatch(generated.patch);
       if (changedFiles.some((file) => file.split("/")[0].toLowerCase() === ".github"))
         throw Error("FACTORY_REMOTE_WORKFLOW_CHANGE");
