@@ -59,7 +59,7 @@ export async function createPilotRuntime(control) {
       const baseSha=(await client.git.getRef({...scope,ref:'heads/main'})).data.object.sha;
       const count=project.rehearsalRunIds.length;
       const prior=(await store.releaseHistory(owner,project.id)).some(j=>j.kind==='deploy'&&j.status==='completed'&&j.result?.evidence?.pipelineState?.target==='production');
-      if(count<3||!prior)return {costCents:0,finding:{id:count<3?`activation-rehearsal-${count+1}`:'activation-release',kind:'improvement',request:'Make exactly one small wording improvement in the existing h1 of site/index.html: replace "probar cada cambio" with "verificar cada cambio". Keep every HTML tag, attribute, warning and all other text unchanged. The pilot is not evidence of a complete general-purpose software factory. Return a minimal unified diff.',baseSha,artifactIds:[`https://github.com/${repository}/commit/${baseSha}`]}};
+      if(count<3||!prior)return {costCents:0,finding:{id:count<3?`activation-rehearsal-${count+1}`:'activation-release',kind:'improvement',request:'Make exactly one small wording improvement in the existing h1 of site/index.html: replace "probar cada cambio" with "verificar cada cambio". Keep every HTML tag, attribute, warning and all other text unchanged. The pilot is not evidence of a complete general-purpose software factory.',baseSha,artifactIds:[`https://github.com/${repository}/commit/${baseSha}`]}};
       const issues=await api(control,'/issues?state=open&labels=factory-approved&per_page=100',{signal:context.signal});
       const selected=issues.filter(i=>!i.pull_request&&i.user?.login==='robertmanzanillag-jpg'&&typeof i.body==='string'&&i.body.length<=4000);
       const job=await currentJob('discover',undefined);
@@ -93,7 +93,7 @@ export async function createPilotRuntime(control) {
     },
     async evaluate() {return {costCents:0,changesPolicy:false,cases:[]};},
   };
-  const worker=await createResponsesFactoryWorker({model,sourcePaths:{[repository]:['site/index.html']},maxOutputTokens:2048,github:{exportSource:createFactoryPilotGitHubSourceExporter(client),publisherClient:client,actionsClient:client,repositories:{[repository]:{baseBranch:'main',checks:profile}},publicationCostCents:0,now,maxPolls:25,classifyCandidate:async candidate=>{
+  const worker=await createResponsesFactoryWorker({model,patchMode:"plainTextEdits",sourcePaths:{[repository]:['site/index.html']},maxOutputTokens:2048,github:{exportSource:createFactoryPilotGitHubSourceExporter(client),publisherClient:client,actionsClient:client,repositories:{[repository]:{baseBranch:'main',checks:profile}},publicationCostCents:0,now,maxPolls:25,classifyCandidate:async candidate=>{
     const a=await prepareReleaseArtifacts({baseSha:candidate.baseSha,headSha:candidate.headSha,target:'staging',operation:'rollback',jobId:randomUUID(),request:control.github});
     try{return classifyPilotTextChange(await source(candidate),{baseSha:candidate.baseSha,artifactSha256:a.rootManifest.identity,verified:true});}finally{await a.cleanup();}
   }},runtime:{owner,store,now,reservations:{discover:1,build:2,simulate:1,review:2,deploy:1,verify:1,rollback:1,evaluate:1},stages}});
