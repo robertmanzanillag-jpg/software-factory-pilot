@@ -5365,9 +5365,12 @@ function plainTextPatch(source, response) {
     if (!valid(edit.before) || !valid(edit.after) || edit.before === edit.after) return "";
     const offset = source.indexOf(edit.before);
     if (offset < 0 || source.indexOf(edit.before, offset + 1) !== -1) return "";
-    const opening = source.lastIndexOf(">", offset);
-    const closing = source.indexOf("<", offset);
-    if (opening < 0 || source.lastIndexOf("<", offset) > opening || closing < offset + edit.before.length) return "";
+    let textStart = 0, inText = false;
+    for (const tag of source.matchAll(/<(?:"[^"]*"|'[^']*'|[^'">])*>/g)) {
+      if (offset >= textStart && offset + edit.before.length <= tag.index) inText = true;
+      textStart = tag.index + tag[0].length;
+    }
+    if (!inText) return "";
     const updated = source.slice(0, offset) + edit.after + source.slice(offset + edit.before.length);
     const oldLines = source.slice(0, -1).split("\n"), newLines = updated.slice(0, -1).split("\n");
     return [
