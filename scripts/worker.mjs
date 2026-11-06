@@ -1,10 +1,12 @@
 import {openControl,owner,ownerKey,shouldPauseNewWork} from './control.mjs';
 import {createPilotRuntime} from './runtime.mjs';
+import {reconcileActivation} from './reconcile-activation.mjs';
 import {currentFactoryProductionDeployment} from './factory-core.mjs';
 const control=await openControl();
 const mode=process.argv[2];
-if(!['activate','run','status'].includes(mode))throw Error('WORKER_MODE_INVALID');
+if(!['activate','run','status','recover'].includes(mode))throw Error('WORKER_MODE_INVALID');
 if(mode==='activate')await control.bootstrap();
+if(mode==='recover')await reconcileActivation(control);
 const state=await control.store.status(owner);
 if(mode==='status')console.log(JSON.stringify({configured:state.configured,paused:state.paused,spentCents:state.spentCents,reservedCents:state.reservedCents,priorCostsCents:state.fixedCents}));
 else {

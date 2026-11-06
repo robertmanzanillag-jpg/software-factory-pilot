@@ -2,7 +2,7 @@ name: Software factory worker
 on:
   workflow_dispatch:
     inputs:
-      mode: {type: choice, options: [run, activate, status], default: run, required: true}
+      mode: {type: choice, options: [run, activate, status, recover], default: run, required: true}
   schedule:
     - cron: '17 * * * *'
 permissions: {}
