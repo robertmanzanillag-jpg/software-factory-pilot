@@ -36,3 +36,9 @@ test('a stalled request cannot consume the restoration time reserve',async()=>{
  try {await assert.rejects(verify({base:'https://robertmanzanillag-jpg.github.io/software-factory-pilot/',manifest:{identity:'x'},request,maxElapsedMs:25}),/UNVERIFIED/);assert.ok(Date.now()-started<1500);}
  finally{clearTimeout(keepAlive);}
 });
+
+test('parent stage cancellation stops public verification before any request', async () => {
+  let calls=0;
+  await assert.rejects(verify({base:'https://robertmanzanillag-jpg.github.io/software-factory-pilot/',manifest:{identity:'test'},signal:AbortSignal.abort(),request:async()=>{calls++;throw Error('must not fetch');}}));
+  assert.equal(calls,0);
+});

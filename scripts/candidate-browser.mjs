@@ -4,10 +4,23 @@ import {createServer} from 'node:http';
 import {readFile,readdir,access} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
-const root='/work/out', expected=process.env.CANDIDATE_SHA;
+const variant=process.env.BROWSER_VARIANT;
+assert.ok(['baseline','candidate'].includes(variant));
+const root=`/work/${variant}/out`, expected=process.env.CANDIDATE_SHA;
 assert.match(expected??'',/^[a-f0-9]{40}$/);
+const releases={};
+for(const role of ['baseline','candidate']) {
+  const sha=process.env[role==='baseline'?'BASE_SHA':'HEAD_SHA'];
+  assert.match(sha??'',/^[a-f0-9]{40}$/);
+  const data=JSON.parse(await readFile(`/work/${role}/out/health.json`,'utf8'));
+  assert.equal(data.revision,sha);assert.equal(data.variant,'baseline');
+  for(const file of ['index.html','style.css']) assert.equal(createHash('sha256').update(await readFile(`/work/${role}/out/${file}`)).digest('hex'),data.files[file]);
+  assert.equal(createHash('sha256').update(JSON.stringify({revision:data.revision,variant:data.variant,files:data.files})).digest('hex'),data.identity);
+  releases[role]={sha,identity:data.identity,files:data.files};
+}
 const manifest=JSON.parse(await readFile(`${root}/health.json`,'utf8'));
 assert.equal(manifest.revision,expected);
+assert.equal(expected,releases[variant].sha);
 for(const file of ['index.html','style.css']) assert.equal(createHash('sha256').update(await readFile(`${root}/${file}`)).digest('hex'),manifest.files[file]);
 const server=createServer(async(req,res)=>{
   const file=new URL(req.url,'http://localhost').pathname;
@@ -23,7 +36,7 @@ for(const dir of await readdir('/ms-playwright')) for(const suffix of ['chrome-l
   const file=`/ms-playwright/${dir}/${suffix}`;try{await access(file);executable=file;}catch{}
 }
 assert.ok(executable,'Pinned image must contain Chromium');
-const browser=spawn(executable,['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--remote-debugging-port=9222','--remote-debugging-address=127.0.0.1','--user-data-dir=/tmp/browser-profile','about:blank'],{stdio:'ignore'});
+const browser=spawn(executable,['--headless','--no-sandbox','--disable-dev-shm-usage','--disable-background-networking','--remote-debugging-port=9222','--remote-debugging-address=127.0.0.1',`--user-data-dir=/tmp/browser-profile-${variant}`,'about:blank'],{stdio:'ignore'});
 let socket,sequence=0;const pending=new Map();
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn){for(let i=0;i<100;i++){try{const value=await fn();if(value)return value;}catch{}await wait(100);}throw Error('BROWSER_DEADLINE');}
@@ -36,6 +49,7 @@ try {
   const call=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP_TIMEOUT'));},5000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}));});
   const evaluate=async expression=>{const r=await call('Runtime.evaluate',{expression,returnByValue:true});assert.ok(!r.exceptionDetails);return r.result.value;};
   await call('Page.enable');
+  const screenshots=[];
   for(const width of [390,1280]){
     await call('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:false});
     await call('Page.navigate',{url:origin});
@@ -44,12 +58,15 @@ try {
     assert.ok(rendered.title.trim()&&rendered.heading.trim()&&rendered.visible&&rendered.styled);
     assert.equal(rendered.overflow,false);assert.equal(rendered.link,`${origin}/health.json`);
     const screenshot=await call('Page.captureScreenshot',{format:'png'});assert.ok(Buffer.from(screenshot.data,'base64').length>1000);
+    screenshots.push({viewport:width===390?'mobile':'desktop',sha256:createHash('sha256').update(Buffer.from(screenshot.data,'base64')).digest('hex')});
     await evaluate('document.querySelector("a[href=\"health.json\"]").click()');
     await until(()=>evaluate('location.pathname === "/health.json" && document.readyState === "complete"'));
     const live=JSON.parse(await evaluate('document.querySelector("pre")?.textContent ?? document.body.innerText'));assert.deepEqual(live,manifest);
   }
-  console.log(JSON.stringify({candidateSha:expected,browserPassed:true,viewports:[390,1280],identity:manifest.identity,scope:'isolated rendering and identity link; not live deployment recovery'}));
+  console.log(JSON.stringify({version:1,variant,testedSha:expected,baseSha:releases.baseline.sha,headSha:releases.candidate.sha,browserPassed:true,viewports:['mobile','desktop'],widths:[390,1280],journeys:['page-render','identity-link'],releases,screenshots,scope:'isolated rendering and identity link; not live deployment recovery'}));
 } finally {
   socket?.close();for(const p of pending.values())clearTimeout(p.timer);
-  browser.kill('SIGKILL');await new Promise(resolve=>server.close(resolve));
+  const exited=new Promise(resolve=>browser.once('exit',resolve));
+  if(browser.exitCode===null&&browser.signalCode===null){browser.kill('SIGKILL');await exited;}
+  await new Promise(resolve=>server.close(resolve));
 }

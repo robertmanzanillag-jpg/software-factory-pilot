@@ -1,124 +1,19 @@
-name: Pilot publication and recovery
+name: Pilot control tests
 on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
-    inputs:
-      rehearsal:
-        description: Publish an isolated rehearsal and restore the verified baseline
-        type: boolean
-        default: false
-  schedule:
-    - cron: '23 * * * *'
 permissions: {}
 concurrency:
-  group: pilot-publication
+  group: pilot-tests-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    permissions:
-      contents: read
+    permissions: {contents: read}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        timeout-minutes: 2
-        with:
-          persist-credentials: false
-      - run: node --test tests/site.test.mjs
-  publish:
-    if: github.repository == 'robertmanzanillag-jpg/software-factory-pilot' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: checks
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    environment:
-      name: github-pages
-      url: https://robertmanzanillag-jpg.github.io/software-factory-pilot/
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        timeout-minutes: 2
-        with:
-          persist-credentials: false
-      - name: Build immutable baseline
         timeout-minutes: 1
-        run: node scripts/site.mjs build
-        env:
-          PILOT_OUTPUT: out/baseline
-      - name: Check existing baseline
-        timeout-minutes: 2
-        id: existing
-        continue-on-error: true
-        run: node scripts/site.mjs verify
-        env:
-          PILOT_OUTPUT: out/baseline
-      - name: Configure Pages
-        timeout-minutes: 2
-        if: steps.existing.outcome != 'success' || inputs.rehearsal == true
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
-      - name: Preserve restoration artifact
-        timeout-minutes: 2
-        if: steps.existing.outcome != 'success' || inputs.rehearsal == true
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
-        with:
-          name: baseline
-          path: out/baseline
-          retention-days: 1
-      - name: Publish or recover baseline
-        timeout-minutes: 3
-        if: steps.existing.outcome != 'success'
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
-        with:
-          artifact_name: baseline
-          timeout: 180000
-      - name: Verify baseline before rehearsal
-        timeout-minutes: 2
-        run: node scripts/site.mjs verify
-        env:
-          PILOT_OUTPUT: out/baseline
-      - name: Build rehearsal
-        timeout-minutes: 1
-        if: inputs.rehearsal == true
-        run: node scripts/site.mjs build
-        env:
-          PILOT_VARIANT: rehearsal
-          PILOT_OUTPUT: out/rehearsal
-      - name: Upload rehearsal
-        timeout-minutes: 2
-        if: inputs.rehearsal == true
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
-        with:
-          name: rehearsal
-          path: out/rehearsal
-          retention-days: 1
-      - name: Publish rehearsal
-        timeout-minutes: 3
-        id: candidate
-        if: inputs.rehearsal == true
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
-        with:
-          artifact_name: rehearsal
-          timeout: 180000
-      - name: Verify actual rehearsal
-        timeout-minutes: 2
-        if: inputs.rehearsal == true
-        run: node scripts/site.mjs verify
-        env:
-          PILOT_OUTPUT: out/rehearsal
-      - name: Restore baseline after attempted rehearsal
-        timeout-minutes: 3
-        if: always() && inputs.rehearsal == true && steps.candidate.outcome != 'skipped'
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
-        with:
-          artifact_name: baseline
-          timeout: 180000
-      - name: Verify actual restoration
-        timeout-minutes: 2
-        if: always() && inputs.rehearsal == true && steps.candidate.outcome != 'skipped'
-        run: node scripts/site.mjs verify
-        env:
-          PILOT_OUTPUT: out/baseline
+        with: {persist-credentials: false}
+      - run: node --test tests/*.test.mjs

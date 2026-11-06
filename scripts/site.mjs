@@ -23,10 +23,10 @@ export async function build({source='site',output='out',revision,variant='baseli
   await writeFile(`${output}/.nojekyll`,'');
   return manifest;
 }
-export async function verify({base,manifest,request=fetch,attempts=18,wait=ms=>new Promise(r=>setTimeout(r,ms)),maxElapsedMs=90000}) {
-  if(base!=='https://robertmanzanillag-jpg.github.io/software-factory-pilot/') throw Error('UNAUTHORIZED_PUBLISH_TARGET');
+export async function verify({base,manifest,request=fetch,attempts=18,wait=ms=>new Promise(r=>setTimeout(r,ms)),maxElapsedMs=90000,signal}) {
+  if(!['https://robertmanzanillag-jpg.github.io/software-factory-pilot/','https://robertmanzanillag-jpg.github.io/software-factory-pilot/staging/'].includes(base)) throw Error('UNAUTHORIZED_PUBLISH_TARGET');
   if(!Number.isInteger(attempts)||attempts<1||attempts>18 || !Number.isInteger(maxElapsedMs)||maxElapsedMs<1||maxElapsedMs>90000) throw Error('INVALID_ATTEMPTS');
-  const deadline=Date.now()+maxElapsedMs, deadlineSignal=AbortSignal.timeout(maxElapsedMs);
+  const deadline=Date.now()+maxElapsedMs, timeoutSignal=AbortSignal.timeout(maxElapsedMs),deadlineSignal=signal?AbortSignal.any([signal,timeoutSignal]):timeoutSignal;
   const nonce=randomUUID(); let failure='UNKNOWN';
   for(let i=0;i<attempts;i++) {
     try {
