@@ -29,7 +29,7 @@ else {
       if(!status.paused && !shouldPauseNewWork(status,control.now()) && !jobs.some(j=>['pending','running','unknown'].includes(j.status))) {
         if(project.rehearsalRunIds.length>=3&&!project.automaticRelease)await control.store.configureProjectExecution(ownerKey,project.id,{release:true,rollback:true,automaticRelease:true});
         const everProduction=releases.some(j=>j.kind==='deploy'&&j.status==='completed'&&j.result?.evidence?.pipelineState?.target==='production');
-        const key=everProduction?`daily:${project.id}:${control.now().toISOString().slice(0,10)}`:`activation:${project.id}:${project.rehearsalRunIds.length}`;
+        const key=everProduction?`daily:${project.id}:${control.now().toISOString().slice(0,10)}`:`activation:${project.id}:${project.rehearsalRunIds.length}:${process.env.GITHUB_SHA}`;
         if(!jobs.some(j=>j.key===key))await control.store.enqueue(owner,{key,projectId:project.id,kind:'discover',reservedCents:1,payload:{source:'trusted-controller'}});
         jobs=await control.store.list(owner);
       }
@@ -50,5 +50,5 @@ else {
   } finally {clearInterval(timer);runtime.worker.stop();}
   const result=await control.store.status(owner),jobs=await control.store.list(owner);
   console.log(JSON.stringify({paused:result.paused,spentCents:result.spentCents,reservedCents:result.reservedCents,priorCostsCents:result.fixedCents,jobs:jobs.slice(0,12).map(j=>({id:j.id,kind:j.kind,status:j.status,reason:j.result?.reason}))}));
-  if(maintenanceError||jobs.some(j=>j.status==='unknown'))process.exitCode=1;
+  if(maintenanceError||jobs.some(j=>j.status==='unknown')||['failed','blocked'].includes(jobs[0]?.status))process.exitCode=1;
 }
