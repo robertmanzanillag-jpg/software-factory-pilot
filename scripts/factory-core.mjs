@@ -5399,7 +5399,10 @@ function createOpenAiFactoryPatchGenerator(options) {
       signal
     });
     if (result.status === "unknown") throw new Error("FACTORY_MODEL_EXECUTION_UNCONFIRMED");
-    return { patch: result.status === "completed" ? result.text : "", costCents: result.costCents };
+    const text = result.status === "completed" ? result.text : "";
+    const patch = text && !text.endsWith("\n") ? `${text}
+` : text;
+    return { patch, costCents: result.costCents };
   };
 }
 
@@ -5785,6 +5788,7 @@ function createFactoryRemotePipelineBuilder(options) {
     const project = { ...rawProject }, baseSha = state.finding.baseSha, request = state.finding.request;
     const stopped = () => context.signal.throwIfAborted();
     let costCents = 0, uncertain = false, workspace;
+    let phase = "INPUT";
     const result = (status, reason) => ({ status, costCents: status === "unknown" ? context.maxCostCents : costCents, reason });
     try {
       if ([o.exportSource, o.generatePatch, o.prepareCandidate, o.finalizeCandidate, o.preflight, o.verifyCandidate, o.now].some((f) => typeof f !== "function"))
@@ -5795,12 +5799,14 @@ function createFactoryRemotePipelineBuilder(options) {
       if (!(await o.preflight(project, baseSha, context)).allowed)
         return result("blocked", "FACTORY_REMOTE_PREFLIGHT_BLOCKED");
       stopped();
+      phase = "SOURCE";
       workspace = await mkdtemp(path3.join(os.tmpdir(), "factory-remote-"));
       const exported = await o.exportSource(project.repo, baseSha, workspace);
       if (exported.sha !== baseSha)
         throw Error("FACTORY_REMOTE_SOURCE_IDENTITY");
       await inspect(workspace);
       stopped();
+      phase = "MODEL";
       uncertain = true;
       const generated = await o.generatePatch({ repository: project.repo, baseSha, request, reservedCents: context.maxCostCents - o.publicationCostCents, testCommand: [], buildCommand: [] }, { workspace, maxCostCents: context.maxCostCents - o.publicationCostCents, signal: context.signal });
       if (!Number.isSafeInteger(generated.costCents) || generated.costCents < 0 || generated.costCents > context.maxCostCents - o.publicationCostCents)
@@ -5808,16 +5814,19 @@ function createFactoryRemotePipelineBuilder(options) {
       costCents = generated.costCents;
       uncertain = false;
       stopped();
+      phase = "PATCH";
       const changedFiles = validateFactoryPublicationPatch(generated.patch);
       if (changedFiles.some((file) => file.split("/")[0].toLowerCase() === ".github"))
         throw Error("FACTORY_REMOTE_WORKFLOW_CHANGE");
       const patchSha256 = createHash7("sha256").update(generated.patch).digest("hex");
       uncertain = true;
+      phase = "CANDIDATE";
       const candidate = await o.prepareCandidate({ repository: project.repo, baseSha, patch: generated.patch, expectedPatchSha256: patchSha256 });
       costCents += o.publicationCostCents;
       if (candidate.repository !== project.repo || candidate.baseSha !== baseSha || !/^[a-f0-9]{40}$/.test(candidate.headSha) || candidate.patchSha256 !== patchSha256 || JSON.stringify([...candidate.changedFiles].sort()) !== JSON.stringify([...changedFiles].sort()))
         throw Error("FACTORY_REMOTE_CANDIDATE_IDENTITY");
       stopped();
+      phase = "CHECKS";
       const checked = await o.verifyCandidate(project, candidate, { signal: context.signal, maxCostCents: context.maxCostCents - costCents });
       if (checked.status === "unknown" || !Number.isSafeInteger(checked.costCents) || checked.costCents < 0 || checked.costCents > context.maxCostCents - costCents)
         throw Error("FACTORY_REMOTE_CHECK_UNCONFIRMED");
@@ -5831,6 +5840,7 @@ function createFactoryRemotePipelineBuilder(options) {
       if (checked.projectId !== project.id || checked.baseSha !== baseSha || checked.headSha !== candidate.headSha || checked.testPassed !== true || checked.buildPassed !== true || !checked.actorId.trim() || !checked.artifactIds.length || checked.artifactIds.some((id2) => !id2.trim()) || !Number.isFinite(age) || age < 0 || age > 36e5)
         throw Error("FACTORY_REMOTE_CHECK_IDENTITY");
       uncertain = true;
+      phase = "PR";
       const published = await o.finalizeCandidate(candidate);
       if (published.headSha !== candidate.headSha || published.appliedPatchSha256 !== patchSha256 || (!published.prUrl.startsWith(`https://github.com/${project.repo}/pull/`) || !/^[1-9][0-9]*$/.test(published.prUrl.slice(`https://github.com/${project.repo}/pull/`.length))))
         throw Error("FACTORY_REMOTE_PR_IDENTITY");
@@ -5843,7 +5853,7 @@ function createFactoryRemotePipelineBuilder(options) {
       }
       return { costCents, candidate: { projectId: project.id, baseSha, headSha: candidate.headSha, prUrl: published.prUrl, builderId: "factory-remote-builder", risk: classification.risk, reversible: classification.reversible, affectsContracts: classification.affectsContracts, affectsData: classification.affectsData, changedFiles, repairAttempts: state.repairAttempts }, tests: { projectId: project.id, baseSha, headSha: candidate.headSha, kind: "tests", passed: true, warnings: [], actorId: checked.actorId, createdAt: checked.createdAt, artifactIds: checked.artifactIds, journeyIds: checked.regressionScenarioIds } };
     } catch {
-      return result(uncertain ? "unknown" : "failed", uncertain ? "FACTORY_REMOTE_EXECUTION_UNCONFIRMED" : "FACTORY_REMOTE_BUILD_FAILED");
+      return result(uncertain ? "unknown" : "failed", uncertain ? "FACTORY_REMOTE_EXECUTION_UNCONFIRMED" : `FACTORY_REMOTE_BUILD_FAILED:${phase}`);
     } finally {
       if (workspace) {
         try {
