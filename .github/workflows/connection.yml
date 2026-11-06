@@ -1,0 +1,37 @@
+name: Verify factory connection
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: factory-state
+  cancel-in-progress: false
+jobs:
+  connection:
+    if: github.repository == 'robertmanzanillag-jpg/software-factory-pilot' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+      - name: Prove encrypted storage and concurrent writes
+        timeout-minutes: 2
+        run: node scripts/connection-proof.mjs storage
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Read state in a new process
+        timeout-minutes: 1
+        run: node scripts/connection-proof.mjs restart
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Verify bounded Responses request
+        timeout-minutes: 2
+        run: node scripts/connection-proof.mjs model
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}

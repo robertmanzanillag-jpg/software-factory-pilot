@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile, readdir, lstat } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 const hash = data => createHash('sha256').update(data).digest('hex');
@@ -13,6 +13,7 @@ export async function build({source='site',output='out',revision,variant='baseli
     if(!(await lstat(`${source}/${name}`)).isFile()) throw Error('REGULAR_FILES_ONLY');
     let data=await readFile(`${source}/${name}`);
     if(data.length>100000) throw Error('SITE_SIZE_LIMIT');
+    data=Buffer.from(new TextDecoder('utf8',{fatal:true,ignoreBOM:true}).decode(data).replace(/\r\n/g,'\n'));
     if(name==='index.html' && variant==='rehearsal') data=Buffer.from(data.toString('utf8').replace('<h1>','<h1>Ensayo de recuperación: '));
     files[name]=hash(data); await writeFile(`${output}/${name}`,data);
   }
@@ -22,15 +23,16 @@ export async function build({source='site',output='out',revision,variant='baseli
   await writeFile(`${output}/.nojekyll`,'');
   return manifest;
 }
-export async function verify({base,manifest,request=fetch,attempts=12,wait=ms=>new Promise(r=>setTimeout(r,ms)),maxElapsedMs=90000}) {
+export async function verify({base,manifest,request=fetch,attempts=18,wait=ms=>new Promise(r=>setTimeout(r,ms)),maxElapsedMs=90000}) {
   if(base!=='https://robertmanzanillag-jpg.github.io/software-factory-pilot/') throw Error('UNAUTHORIZED_PUBLISH_TARGET');
-  if(!Number.isInteger(attempts)||attempts<1||attempts>12 || !Number.isInteger(maxElapsedMs)||maxElapsedMs<1||maxElapsedMs>90000) throw Error('INVALID_ATTEMPTS');
+  if(!Number.isInteger(attempts)||attempts<1||attempts>18 || !Number.isInteger(maxElapsedMs)||maxElapsedMs<1||maxElapsedMs>90000) throw Error('INVALID_ATTEMPTS');
   const deadline=Date.now()+maxElapsedMs, deadlineSignal=AbortSignal.timeout(maxElapsedMs);
+  const nonce=randomUUID(); let failure='UNKNOWN';
   for(let i=0;i<attempts;i++) {
     try {
       const get=async name=>{
         deadlineSignal.throwIfAborted();
-        const r=await request(`${base}${name}?release=${manifest.identity}&check=${i}`,{redirect:'error',cache:'no-store',signal:AbortSignal.any([deadlineSignal,AbortSignal.timeout(5000)])});
+        const r=await request(`${base}${name}?release=${manifest.identity}&probe=${nonce}&check=${i}`,{redirect:'error',cache:'no-store',signal:AbortSignal.any([deadlineSignal,AbortSignal.timeout(5000)])});
         if(r.status!==200) {await r.body?.cancel();throw Error('PUBLICATION_NOT_READY');}
         const reader=r.body?.getReader(); if(!reader) throw Error('EMPTY_PUBLICATION');
         const chunks=[]; let size=0;
@@ -43,7 +45,7 @@ export async function verify({base,manifest,request=fetch,attempts=12,wait=ms=>n
       if(JSON.stringify(live)!==JSON.stringify(manifest)) throw Error('WRONG_RELEASE');
       for(const name of ['index.html','style.css']) if(hash(await get(name))!==manifest.files[name]) throw Error('WRONG_FILE');
       return {verified:true,identity:manifest.identity,revision:manifest.revision,variant:manifest.variant,at:new Date().toISOString()};
-    } catch { if(i===attempts-1 || Date.now()>=deadline || deadlineSignal.aborted) throw Error('LIVE_RELEASE_UNVERIFIED'); await wait(Math.min(5000,Math.max(0,deadline-Date.now()))); }
+    } catch(e) { failure=['PUBLICATION_NOT_READY','EMPTY_PUBLICATION','UNEXPECTED_PUBLICATION','WRONG_RELEASE','WRONG_FILE'].includes(e.message)?e.message:'REQUEST_FAILED'; if(i===attempts-1 || Date.now()>=deadline || deadlineSignal.aborted) throw Error(`LIVE_RELEASE_UNVERIFIED:${failure}`); await wait(Math.min(5000,Math.max(0,deadline-Date.now()))); }
   }
 }
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
