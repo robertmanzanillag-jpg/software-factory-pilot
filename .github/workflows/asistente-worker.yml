@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 45
     permissions: {contents: read}
     env:
-      CONTROLLER_SHA: b8a7c557c1a3ed139bc115c4b8b40bf0b4df608e
+      CONTROLLER_SHA: 8fae623d4b4367d3fc1ef285394efd5d1039d5fa
       NODE_IMAGE: docker.io/library/node@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -74,4 +74,5 @@ jobs:
           if [ -n "${ASISTENTE_PRIVATE_DIR:-}" ]; then
             case "$ASISTENTE_PRIVATE_DIR" in "$RUNNER_TEMP"/asistente-cloud-*) test ! -L "$ASISTENTE_PRIVATE_DIR"; rm -rf -- "$ASISTENTE_PRIVATE_DIR";; *) exit 1;; esac
           fi
+
 
