@@ -1,0 +1,78 @@
+name: Asistente bounded cloud worker
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '43 * * * *'
+permissions: {}
+concurrency:
+  group: asistente-shared-queue
+  cancel-in-progress: false
+jobs:
+  run:
+    if: github.event.repository.private == false && github.repository == 'robertmanzanillag-jpg/software-factory-pilot' && github.ref == 'refs/heads/main' && vars.ASISTENTE_CLOUD_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions: {contents: read}
+    env:
+      CONTROLLER_SHA: 8fae623d4b4367d3fc1ef285394efd5d1039d5fa
+      NODE_IMAGE: docker.io/library/node@sha256:c0a93797ee78814ae6d32fcca2561fdbbe423149c3f5389aad32d86e9fd85bd4
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - name: Prepare reviewed controller without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CONTROLLER_SHA" =~ ^[a-f0-9]{40}$ ]]
+          mkdir controller-checkout controller dependencies
+          git -C controller-checkout init --quiet
+          git -C controller-checkout -c credential.helper= fetch --quiet --depth 1 https://github.com/robertmanzanillag-jpg/blackops-reminder.git "$CONTROLLER_SHA"
+          test "$(git -C controller-checkout rev-parse FETCH_HEAD)" = "$CONTROLLER_SHA"
+          git -C controller-checkout archive FETCH_HEAD | tar --exclude='credentials' --exclude='secrets' -x -C controller
+          test -z "$(find controller -type l -print -quit)"
+          test -z "$(find controller -type d \( -name .git -o -name node_modules -o -name credentials -o -name secrets \) -print -quit)"
+          test -z "$(find controller -type f \( -name '.env' -o -name '.env.*' -o -name '*.pem' -o -name '*.key' \) -print -quit)"
+          cp controller/package.json controller/package-lock.json dependencies/
+          timeout --kill-after=10 180 docker pull "$NODE_IMAGE" >/dev/null
+          container="asistente-dependencies-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() { timeout --kill-after=5 10 docker rm -f "$container" >/dev/null 2>&1 || true; remaining=$(timeout --kill-after=5 10 docker ps -aq --filter "name=^/${container}$") || return 1; test -z "$remaining"; }
+          trap 'status=$?; cleanup || status=1; exit "$status"' EXIT
+          timeout --kill-after=10 300 docker run --rm --name "$container" --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --memory 3g --cpus 2 --pids-limit 128 \
+            --tmpfs /tmp:rw,nosuid,size=512m --env HOME=/tmp \
+            --mount "type=bind,src=$PWD/dependencies,dst=/dependencies" --workdir /dependencies \
+            "$NODE_IMAGE" npm ci --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org
+          mkdir controller/node_modules
+      - name: Prepare private runtime configuration
+        run: node scripts/asistente-cloud-config.mjs
+        env:
+          ASISTENTE_DATABASE_URL: ${{ secrets.ASISTENTE_DATABASE_URL }}
+          ASISTENTE_OPENAI_API_KEY: ${{ secrets.ASISTENTE_OPENAI_API_KEY }}
+          ASISTENTE_GITHUB_TOKEN: ${{ secrets.ASISTENTE_GITHUB_TOKEN }}
+          ASISTENTE_OPERATOR_JSON: ${{ secrets.ASISTENTE_OPERATOR_JSON }}
+          ASISTENTE_CREDIT_JSON: ${{ secrets.ASISTENTE_CREDIT_JSON }}
+      - name: Run bounded proposal cycle against the existing shared ledger
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="asistente-controller-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() { timeout --kill-after=5 10 docker rm -f "$container" >/dev/null 2>&1 || true; remaining=$(timeout --kill-after=5 10 docker ps -aq --filter "name=^/${container}$") || return 1; test -z "$remaining"; }
+          trap 'status=$?; cleanup || status=1; exit "$status"' EXIT
+          timeout --signal=TERM --kill-after=30 1920 docker run --rm --init --name "$container" \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --user "$(id -u):$(id -g)" --memory 3g --cpus 2 --pids-limit 128 \
+            --tmpfs /tmp:rw,nosuid,size=256m --env HOME=/tmp --env-file "$ASISTENTE_PRIVATE_DIR/runtime.env" \
+            --mount "type=bind,src=$PWD/controller,dst=/controller,readonly" \
+            --mount "type=bind,src=$PWD/dependencies/node_modules,dst=/controller/node_modules,readonly" \
+            --mount "type=bind,src=$ASISTENTE_PRIVATE_DIR,dst=/run/factory-secrets,readonly" \
+            --workdir /controller "$NODE_IMAGE" node --import tsx script/software-factory-once.ts
+      - name: Remove ephemeral private configuration
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${ASISTENTE_PRIVATE_DIR:-}" ]; then
+            case "$ASISTENTE_PRIVATE_DIR" in "$RUNNER_TEMP"/asistente-cloud-*) test ! -L "$ASISTENTE_PRIVATE_DIR"; rm -rf -- "$ASISTENTE_PRIVATE_DIR";; *) exit 1;; esac
+          fi
+
+

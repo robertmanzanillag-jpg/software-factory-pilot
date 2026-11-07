@@ -1,0 +1,16 @@
+name: Asistente cloud controller checks
+on:
+  push:
+    branches: [codex/asistente-cloud-executor]
+  pull_request:
+    paths: ['scripts/asistente-cloud-config.mjs', 'tests/asistente-cloud-config.test.mjs', '.github/workflows/asistente-*.yml']
+permissions: {}
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - run: node --test tests/asistente-cloud-config.test.mjs
